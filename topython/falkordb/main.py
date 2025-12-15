@@ -1,41 +1,23 @@
-import asyncio
-from falkordb.asyncio import FalkorDB
-from redis.asyncio import BlockingConnectionPool
 
+from falkordb import FalkorDB
 
-async def main():
-    # Connect to FalkorDB
-    pool = BlockingConnectionPool(max_connections=16, timeout=None, decode_responses=True)
-    db = FalkorDB(connection_pool=pool)
+# Connect to FalkorDB
+client  = FalkorDB(host='localhost', port=6379)
+graph = client.select_graph('social')
 
-    # Select the social graph
-    g = db.select_graph('social')
+create_query = """
+CREATE (alice:User {id: 1, name: "Alice", email: "alice@example.com"})
+CREATE (bob:User {id: 2, name: "Bob", email: "bob@example.com"})
+CREATE (charlie:User {id: 3, name: "Charlie", email: "charlie@example.com"})
 
-    # Execute query asynchronously
-    result = await g.query('UNWIND range(0, 100) AS i CREATE (n {v:1}) RETURN n LIMIT 10')
+CREATE (post1:Post {id: 101, content: "Hello World!", date: 1701388800})
+CREATE (post2:Post {id: 102, content: "Graph Databases are awesome!", date: 1701475200})
 
-    # Process results
-    for n in result.result_set:
-        print(n)
+CREATE (alice)-[:FRIENDS_WITH {since: 1640995200}]->(bob)
+CREATE (bob)-[:FRIENDS_WITH {since: 1684108800}]->(charlie)
+CREATE (alice)-[:CREATED {time: 1701388800}]->(post1)
+CREATE (bob)-[:CREATED {time: 1701475200}]->(post2)
+"""
 
-    # Run multiple queries concurrently
-    tasks = [
-        g.query('MATCH (n) WHERE n.v = 1 RETURN count(n) AS count'),
-        g.query('CREATE (p:Person {name: "Alice"}) RETURN p'),
-        g.query('CREATE (p:Person {name: "Bob"}) RETURN p')
-    ]
-
-    results = await asyncio.gather(*tasks)
-
-    # Process concurrent results
-    print(f"Node count: {results[0].result_set[0][0]}")
-    print(f"Created Alice: {results[1].result_set[0][0]}")
-    print(f"Created Bob: {results[2].result_set[0][0]}")
-
-    # Close the connection when done
-    await pool.aclose()
-
-
-# Run the async example
-if __name__ == "__main__":
-    asyncio.run(main())
+graph.query(create_query)
+print("Graph created successfully!")

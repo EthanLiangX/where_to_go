@@ -1,0 +1,21 @@
+[
+    {
+        "time": "14:00",
+        "data": [
+            {
+                "name": "二十涌北路西入口",
+                "location": "二十涌北路西入口",
+                "total_slots": 177,
+                "current_cars": 0,
+                "current_people": 0
+            },
+            {
+                "name": "P9+P8大巴停车场",
+                "location": "二十涌南二路与灵新大道交叉处",
+                "total_slots": 291,
+                "current_cars": 46,
+                "current_people": 0
+            }
+        ]
+    }
+]
