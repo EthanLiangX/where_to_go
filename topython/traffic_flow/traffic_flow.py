@@ -230,7 +230,7 @@ class TrafficAIAnalyzer:
 
             seconds = self.frame_count / self.fps
             current_dt = self.video_start_time + timedelta(seconds=seconds)
-            time_str = current_dt.strftime("%H:%M:%S")
+            time_str = current_dt.strftime("%Y-%m-%d %H:%M:%S")
             minute_str = current_dt.strftime("%H:%M")
 
             results = self.model.track(frame, persist=True, conf=0.5, classes=[2, 3, 5, 7], verbose=False)
@@ -336,7 +336,7 @@ class TrafficAIAnalyzer:
 
 if __name__ == "__main__":
     try:
-        analyzer = TrafficAIAnalyzer(video_source="VID_20220415_084302.mp4")
+        analyzer = TrafficAIAnalyzer(video_source="2025-12-05 171419.mov")
         analyzer.run()
     except Exception as e:
         print(f"Error: {e}")
