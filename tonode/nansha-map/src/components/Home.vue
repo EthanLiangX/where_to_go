@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, shallowRef } from "vue";
 import { Picture } from "@element-plus/icons-vue"; // Element Plus 图标
 import http from "../utils/http"; // 你的 HTTP 工具
 
@@ -105,12 +105,13 @@ const selectValue = ref<ImageOption | null>(null);
 const selectOptions = ref<ImageOption[]>([]);
 
 // 地图实例与图层
-const map = ref<Map | null>(null);
-const xyzLayer = ref<TileLayer<XYZ> | null>(null);
-const geojsonLayer = ref<VectorLayer<VectorSource> | null>(null);
+const map = shallowRef<Map | null>(null);
+const xyzLayer = shallowRef<TileLayer<XYZ> | null>(null);
+const geojsonLayer = shallowRef<VectorLayer<VectorSource> | null>(null);
 
 // URLs
 const tileUrl = ref<string>("");
+const tileMaxZoom = ref<number>(21);
 const geojsonUrl = ref<string>("https://tb-1256849727.cos.ap-beijing.myqcloud.com/NANSHA/track_P.geojson");
 
 // 弹窗状态
@@ -150,6 +151,7 @@ const fetchTileData = async () => {
     const tileRes: any = await http.get(selectValue.value.mbtilesPath);
     if (tileRes && tileRes.tiles) {
       tileUrl.value = tileRes.tiles[0];
+      tileMaxZoom.value = tileRes.maxzoom
     }
   } catch (e) {
     console.error("获取瓦片地址失败", e);
@@ -238,7 +240,7 @@ const initMap = () => {
 
   // 默认选中第一项
   if (selectOptions.value.length > 0) {
-    selectValue.value = selectOptions.value[0];
+    selectValue.value = selectOptions.value[0]!;
     mapAddLayer(); // 加载影像
   }
 
@@ -274,13 +276,12 @@ const initInteractions = () => {
 
       // 假设 GeoJSON 属性中有 photo 字段，如果没有则使用演示图片
       // props.photoUrl 是你 GeoJSON里的字段名
-      currentPhotoUrl.value = props.photoUrl || "https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg";
+      currentPhotoUrl.value = props.img || "https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg";
 
       dialogVisible.value = true;
     }
   });
 };
-
 // 6. 添加影像图层 (XYZ)
 const mapAddLayer = async () => {
   await fetchTileData(); // 获取 url
@@ -290,11 +291,11 @@ const mapAddLayer = async () => {
   if (xyzLayer.value) {
     map.value.removeLayer(xyzLayer.value);
   }
-
   xyzLayer.value = new TileLayer({
     zIndex: 10, // 影像层级：中
     source: new XYZ({
       url: tileUrl.value,
+      maxZoom: tileMaxZoom.value,
     }),
   });
 
@@ -329,7 +330,7 @@ const mapAddGeoJsonLayer = () => {
   source.once("change", () => {
     if (source.getState() === "ready") {
       const extent = source.getExtent();
-      if (extent && isFinite(extent[0])) {
+      if (extent && extent.length >= 4 && isFinite(extent[0]!)) {
         map.value?.getView().fit(extent, {
           padding: [50, 50, 50, 50],
           duration: 500,
