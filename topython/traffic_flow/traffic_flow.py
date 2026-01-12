@@ -199,40 +199,45 @@ class DashboardRenderer:
 class TrafficAIAnalyzer:
     def __init__(self, model_path='yolo11n.pt', video_source='traffic.mp4'):
         self.video_source = video_source
+        # 获取视频元数据
         self.meta = get_video_metadata(video_source)
+        # 视频开始时间和FPS
         self.video_start_time = self.meta['start_time']
         self.fps = self.meta['fps']
 
         print(f"🚀 系统启动 | 布局: 图表右上角 | 标签: 仅显示车型")
 
         self.model = YOLO(model_path)
+        # 打开视频
         self.cap = cv2.VideoCapture(video_source)
         # 初始化图表 (宽600, 高200)
         self.dashboard = DashboardRenderer(width=600, height=200)
+        # 中文绘制器
         self.cn_drawer = ChineseTextDrawer()
-
+        # 统计数据结构
         self.total_unique_ids = set()
         self.total_type_counts = defaultdict(int)
         self.id_type_map = {}
         self.minute_traffic_stats = defaultdict(set)
-
+        # 图表数据历史
         self.chart_time_history = []
         self.chart_flow_history = []
         self.last_chart_img = None
-
+        # 类别映射
         self.class_map = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
         self.frame_count = 0
 
     def run(self):
         while self.cap.isOpened():
+            # 读取视频帧
             success, frame = self.cap.read()
             if not success: break
-
+            # 计算当前时间戳
             seconds = self.frame_count / self.fps
             current_dt = self.video_start_time + timedelta(seconds=seconds)
             time_str = current_dt.strftime("%Y-%m-%d %H:%M:%S")
             minute_str = current_dt.strftime("%H:%M")
-
+            # 车辆检测与跟踪
             results = self.model.track(frame, persist=True, conf=0.5, classes=[2, 3, 5, 7], verbose=False)
             current_ids = []
 
@@ -336,7 +341,7 @@ class TrafficAIAnalyzer:
 
 if __name__ == "__main__":
     try:
-        analyzer = TrafficAIAnalyzer(video_source="2025-12-05 171419.mov")
+        analyzer = TrafficAIAnalyzer(video_source="VID_20220415_084302.mp4")
         analyzer.run()
     except Exception as e:
         print(f"Error: {e}")

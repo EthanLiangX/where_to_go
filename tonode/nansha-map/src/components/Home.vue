@@ -24,17 +24,27 @@
 
     <div id="map"></div>
 
+    <div
+        class="map-compass"
+        ref="compassRef"
+        @mousedown.prevent="startCompassDrag"
+        title="点击复位，拖拽旋转"
+    >
+      <div class="compass-ring" :style="{ transform: `rotate(${rotationValue}rad)` }">
+        <div class="compass-north">N</div>
+        <el-icon class="compass-arrow"><Top /></el-icon>
+      </div>
+    </div>
+
     <el-dialog
         v-model="dialogVisible"
-        title="现场详细信息"
-        width="600px"
+        :title="currentFeatureName"
+        width="500px"
         destroy-on-close
         append-to-body
     >
       <div class="dialog-content">
-        <h3>{{ currentFeatureName }}</h3>
         <p v-if="currentFeatureDesc" class="desc">{{ currentFeatureDesc }}</p>
-
         <el-image
             class="dialog-image"
             :src="currentPhotoUrl"
@@ -47,9 +57,6 @@
               <span>暂无现场照片</span>
             </div>
           </template>
-          <template #placeholder>
-            <div class="image-slot">加载中...</div>
-          </template>
         </el-image>
       </div>
     </el-dialog>
@@ -57,72 +64,63 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from "vue";
-import { Picture } from "@element-plus/icons-vue"; // Element Plus 图标
-import http from "../utils/http"; // 你的 HTTP 工具
+import { onMounted, ref, shallowRef, onUnmounted } from "vue";
+import { Picture, Top } from "@element-plus/icons-vue";
+import http from "../utils/http";
 
-// --- OpenLayers CSS ---
 import "ol/ol.css";
-
-// --- OpenLayers 核心模块 ---
 import Map from "ol/Map";
 import View from "ol/View";
-
-// --- 图层与数据源 ---
 import TileLayer from "ol/layer/Tile";
 import VectorLayer from "ol/layer/Vector";
 import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import VectorSource from "ol/source/Vector";
-
-// --- 几何与格式 ---
 import GeoJSON from "ol/format/GeoJSON";
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
-
-// --- 坐标转换 ---
 import { fromLonLat } from "ol/proj";
-
-// --- 样式 ---
 import { Style, Stroke, Fill, Text, Icon } from "ol/style";
-
-// --- 类型 ---
 import type { FeatureLike } from "ol/Feature";
 
-// ================= 类型定义 =================
+// 交互模块
+import { DragRotate, defaults as defaultInteractions } from 'ol/interaction';
+import { shiftKeyOnly } from 'ol/events/condition';
 
+// 类型定义
 interface ImageOption {
   label: string;
-  value: string; // 缩略图地址
-  mbtilesPath: string; // 瓦片服务地址
+  value: string;
+  mbtilesPath: string;
   issue: string;
   [key: string]: any;
 }
 
-// ================= 状态变量 =================
-
 const selectValue = ref<ImageOption | null>(null);
 const selectOptions = ref<ImageOption[]>([]);
 
-// 地图实例与图层
 const map = shallowRef<Map | null>(null);
 const xyzLayer = shallowRef<TileLayer<XYZ> | null>(null);
 const geojsonLayer = shallowRef<VectorLayer<VectorSource> | null>(null);
 
-// URLs
 const tileUrl = ref<string>("");
-const tileMaxZoom = ref<number>(21);
 const geojsonUrl = ref<string>("https://tb-1256849727.cos.ap-beijing.myqcloud.com/NANSHA/track_P.geojson");
 
-// 弹窗状态
 const dialogVisible = ref(false);
 const currentFeatureName = ref("");
 const currentFeatureDesc = ref("");
 const currentPhotoUrl = ref("");
 
-// ================= 核心逻辑 =================
+// 旋转角度 (弧度)
+const rotationValue = ref(0);
 
-// 1. 获取下拉列表数据
+// 指南针 DOM 引用
+const compassRef = ref<HTMLElement | null>(null);
+// 标记是否发生过拖拽（用于区分点击和拖拽）
+let isDraggingCompass = false;
+
+// --- 业务逻辑 ---
+
 const fetchData = async () => {
   try {
     const res: any = await http.get("/api/img/getImageryList");
@@ -134,182 +132,157 @@ const fetchData = async () => {
         issue: item.issue,
         ...item,
       }));
-
-      // 数据加载完成后初始化地图
       initMap();
     }
   } catch (e) {
     console.error("获取列表失败", e);
-    initMap(); // 即使失败也初始化地图
+    initMap();
   }
 };
 
-// 2. 获取瓦片 Tile URL
 const fetchTileData = async () => {
   if (!selectValue.value) return;
   try {
     const tileRes: any = await http.get(selectValue.value.mbtilesPath);
     if (tileRes && tileRes.tiles) {
       tileUrl.value = tileRes.tiles[0];
-      tileMaxZoom.value = tileRes.maxzoom
     }
   } catch (e) {
     console.error("获取瓦片地址失败", e);
   }
 };
 
-// 3. 样式生成函数 (包含：红框、文字、相机图标)
 const geoJsonStyleFunction = (feature: FeatureLike): Style[] => {
   const styles: Style[] = [];
-  const nameVal = feature.get("name"); // 假设 GeoJSON 属性里有 name
+  const nameVal = feature.get("name");
   const labelText = nameVal ? String(nameVal) : "";
 
-  // A. 基础多边形样式 (红框 + 半透明红底 + 文字)
   styles.push(new Style({
-    stroke: new Stroke({
-      color: "#ff0000",
-      width: 3,
-    }),
-    fill: new Fill({
-      color: "rgba(255,0,0,0.1)",
-    }),
+    stroke: new Stroke({ color: "#ff0000", width: 3 }),
+    fill: new Fill({ color: "rgba(255,0,0,0.1)" }),
     text: new Text({
       text: labelText,
       font: 'bold 14px "Microsoft YaHei", sans-serif',
       fill: new Fill({ color: '#333' }),
       stroke: new Stroke({ color: '#fff', width: 3 }),
-      offsetY: -25, // 文字向上偏移，避开图标
+      offsetY: -25,
       overflow: true,
-    }),
-
+    })
   }));
 
-  // B. 中心图标样式
   const geometry = feature.getGeometry();
   if (geometry) {
     const type = geometry.getType();
     let pointGeometry = null;
-
-    // 计算中心点 (getInteriorPoint 保证点在多边形内部)
     if (type === 'Polygon') {
       pointGeometry = (geometry as Polygon).getInteriorPoint();
     } else if (type === 'MultiPolygon') {
-      // 如果是 MultiPolygon，取最大面积多边形的中心，或者简单取第一个
       pointGeometry = (geometry as MultiPolygon).getPolygon(0).getInteriorPoint();
     }
-
     if (pointGeometry) {
       styles.push(new Style({
         geometry: pointGeometry,
         image: new Icon({
-          // 这里使用一个免费的在线相机图标，实际项目中建议 import 本地图片
-          // 例如: src: new URL('../assets/camera.png', import.meta.url).href,
           src: 'https://cdn-icons-png.flaticon.com/512/3687/3687416.png',
-          scale: 0.06, // 根据图片大小调整
+          scale: 0.06,
           anchor: [0.5, 0.5],
         }),
-        zIndex: 100 // 确保图标在最上层
+        zIndex: 100
       }));
     }
   }
-
   return styles;
 };
 
-// 4. 初始化地图
 const initMap = () => {
   const target = document.getElementById("map");
   if (!target) return;
 
+  const view = new View({
+    center: fromLonLat([113.640418, 22.616928]),
+    zoom: 13,
+    rotation: 0,
+  });
+
   map.value = new Map({
     target: "map",
+    interactions: defaultInteractions({
+      shiftDragZoom: false, // 禁用选框放大
+    }).extend([
+      new DragRotate({ condition: shiftKeyOnly }), // Shift+拖拽旋转
+    ]),
     layers: [
       new TileLayer({
         source: new OSM(),
-        zIndex: 0, // 底图层级最低
+        zIndex: 0,
       }),
     ],
-    view: new View({
-      center: fromLonLat([113.640418, 22.616928]),
-      zoom: 13,
-    }),
+    view: view,
   });
 
-  // 添加交互事件
+  view.on("change:rotation", () => {
+    rotationValue.value = view.getRotation();
+  });
+
   initInteractions();
 
-  // 默认选中第一项
   if (selectOptions.value.length > 0) {
     selectValue.value = selectOptions.value[0]!;
-    mapAddLayer(); // 加载影像
+    mapAddLayer();
   }
 
-  // 加载 GeoJSON
   mapAddGeoJsonLayer();
 };
 
-// 5. 初始化交互 (点击与鼠标样式)
 const initInteractions = () => {
   if (!map.value) return;
 
-  // 鼠标移动变成小手
   map.value.on("pointermove", (evt) => {
     if (!map.value) return;
     const hit = map.value.hasFeatureAtPixel(evt.pixel);
     map.value.getTargetElement().style.cursor = hit ? "pointer" : "";
   });
 
-  // 点击事件
   map.value.on("singleclick", (evt) => {
     if (!map.value) return;
-
-    // 获取点击处的 Feature
     const feature = map.value.forEachFeatureAtPixel(evt.pixel, (feat) => feat);
 
     if (feature) {
       const props = feature.getProperties();
-      console.log("Feature clicked:", props);
 
-      // 填充弹窗数据
       currentFeatureName.value = props.name || "未命名区域";
-      currentFeatureDesc.value = props.description || ""; // 假设有描述字段
-
-      // 假设 GeoJSON 属性中有 photo 字段，如果没有则使用演示图片
-      // props.photoUrl 是你 GeoJSON里的字段名
+      currentFeatureDesc.value = props.description || "";
       currentPhotoUrl.value = props.img || "https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg";
 
       dialogVisible.value = true;
     }
   });
 };
-// 6. 添加影像图层 (XYZ)
-const mapAddLayer = async () => {
-  await fetchTileData(); // 获取 url
 
+const mapAddLayer = async () => {
+  await fetchTileData();
   if (!map.value || !tileUrl.value) return;
 
   if (xyzLayer.value) {
     map.value.removeLayer(xyzLayer.value);
   }
+
   xyzLayer.value = new TileLayer({
-    zIndex: 10, // 影像层级：中
+    zIndex: 10,
     source: new XYZ({
       url: tileUrl.value,
-      maxZoom: tileMaxZoom.value,
+      maxZoom: 18,
     }),
   });
 
   map.value.addLayer(xyzLayer.value);
 };
 
-// 7. 添加 GeoJSON 图层
 const mapAddGeoJsonLayer = () => {
   if (!map.value) return;
-
   if (geojsonLayer.value) {
     map.value.removeLayer(geojsonLayer.value);
   }
-
   const source = new VectorSource({
     url: geojsonUrl.value,
     format: new GeoJSON({
@@ -317,16 +290,12 @@ const mapAddGeoJsonLayer = () => {
       featureProjection: "EPSG:3857",
     }),
   });
-
   geojsonLayer.value = new VectorLayer({
     source: source,
-    zIndex: 999999, // 矢量层级：最高 (确保覆盖在影像上)
-    style: geoJsonStyleFunction, // 使用自定义样式函数
+    zIndex: 999999,
+    style: geoJsonStyleFunction,
   });
-
   map.value.addLayer(geojsonLayer.value);
-
-  // 加载完成后自动缩放
   source.once("change", () => {
     if (source.getState() === "ready") {
       const extent = source.getExtent();
@@ -341,79 +310,169 @@ const mapAddGeoJsonLayer = () => {
   });
 };
 
-// 下拉框改变事件
 const handleChangeTile = () => {
   if (selectValue.value) {
     mapAddLayer();
   }
 };
 
+// ==========================================
+// ⭐ 指南针交互逻辑 (核心部分)
+// ==========================================
+
+// 1. 开始拖拽
+const startCompassDrag = (e: MouseEvent) => {
+  isDraggingCompass = false; // 重置标记
+  // 绑定全局事件
+  window.addEventListener('mousemove', onCompassRotate);
+  window.addEventListener('mouseup', stopCompassDrag);
+  console.log(e)
+};
+
+// 2. 拖拽中计算角度
+const onCompassRotate = (e: MouseEvent) => {
+  if (!compassRef.value || !map.value) return;
+
+  isDraggingCompass = true; // 标记为正在拖拽
+
+  // 获取指南针中心点
+  const rect = compassRef.value.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  // 计算鼠标相对于中心的角度
+  const deltaX = e.clientX - centerX;
+  const deltaY = e.clientY - centerY;
+
+  // Math.atan2 返回的是与 X 轴正向的夹角 (-PI 到 PI)
+  // 而我们希望 Y 轴负向 (正上方) 为 0，且顺时针为正
+  // 需要加上 PI/2 的偏移量
+  const rotation = Math.atan2(deltaY, deltaX) + Math.PI / 2;
+
+  // 设置地图 View 的旋转
+  map.value.getView().setRotation(rotation);
+};
+
+// 3. 结束拖拽
+const stopCompassDrag = () => {
+  window.removeEventListener('mousemove', onCompassRotate);
+  window.removeEventListener('mouseup', stopCompassDrag);
+
+  // 如果没有发生拖拽 (仅仅是点击)，则执行复位逻辑
+  if (!isDraggingCompass) {
+    resetNorth();
+  }
+};
+
+// 4. 复位正北逻辑
+const resetNorth = () => {
+  if (!map.value) return;
+  const view = map.value.getView();
+  if (view.getRotation() !== 0) {
+    view.animate({
+      rotation: 0,
+      duration: 500,
+      easing: (t) => t * (2 - t), // 简单的缓动效果
+    });
+  }
+};
+
+// 组件卸载时清理事件，防止内存泄漏
+onUnmounted(() => {
+  window.removeEventListener('mousemove', onCompassRotate);
+  window.removeEventListener('mouseup', stopCompassDrag);
+});
+
 onMounted(fetchData);
 </script>
 
 <style>
-/* 确保页面高度撑满 */
-html, body, #app {
+/* ... 全局布局保持不变 ... */
+html, body, #app, .home {
   width: 100%;
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
 }
-
-.home {
-  position: relative;
-  width: 100%;
-  height: 100%;
-}
-
 #map {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  background-color: #f0f0f0; /* 添加背景色防止加载时白屏 */
+  background-color: #f0f0f0;
 }
-
-/* 下拉框定位 */
 .home .el-select {
   position: absolute;
   top: 30px;
   left: 30px;
-  z-index: 100; /* 确保在地图之上 */
+  z-index: 100;
   width: 260px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
 }
-
-/* OpenLayers 控件隐藏 */
-.ol-attribution, .ol-zoom {
+.ol-attribution, .ol-zoom, .ol-rotate {
   display: none;
 }
 
-/* 弹窗样式微调 */
-.dialog-content {
-  text-align: center;
-}
-.dialog-image {
-  width: 100%;
-  height: 400px;
-  background-color: #f5f7fa;
-  border-radius: 4px;
-}
-.image-slot {
+/* 指南针样式 */
+.map-compass {
+  position: absolute;
+  top: 30px;
+  right: 30px;
+  width: 50px;
+  height: 50px;
+  background-color: white;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  cursor: grab; /* 鼠标手势 */
   display: flex;
-  flex-direction: column;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
+  user-select: none; /* 防止拖拽时选中文字 */
+}
+
+/* 拖拽时改变鼠标样式 */
+.map-compass:active {
+  cursor: grabbing;
+}
+
+.map-compass:hover {
+  background-color: #f9f9f9;
+  transform: scale(1.05);
+}
+
+.compass-ring {
   width: 100%;
   height: 100%;
-  color: #909399;
-  font-size: 14px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none; /* 让鼠标事件穿透到父级 .map-compass */
 }
-.desc {
-  color: #666;
-  margin-bottom: 15px;
-  text-align: left;
+
+.compass-north {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: bold;
+  color: #ff4d4f;
+  z-index: 2;
 }
+
+.compass-arrow {
+  font-size: 30px;
+  color: #333;
+}
+.compass-arrow svg path {
+  fill: #2c3e50;
+}
+
+/* 弹窗样式 */
+.dialog-content { text-align: center; }
+.dialog-image { width: 100%; height: 400px; background: #f5f7fa; }
+.image-slot { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #909399; }
 </style>
